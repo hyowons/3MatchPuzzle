@@ -1,0 +1,63 @@
+--[[require 'gamemain'
+
+
+local gMain = GameManager:GetInstance()
+local gMain2 = GameManager:GetInstance()
+
+if gMain == gMain2 then
+	print("same Instance")
+end
+
+
+--gMain.Info()
+--gMain2.Print()
+
+]]--
+
+
+
+
+
+ospace = {}
+
+ospace["name"] = "js"
+
+function ospace:print()
+	print("==============================")
+	for k,v in pairs(self) do
+		print (k,v)
+		if (type(v) == "table") then
+			for a,b in pairs(v) do print(">>", a, b) end
+		end
+	end
+end
+
+ospace:print()
+
+
+
+mt = {}
+setmetatable(ospace, mt)
+
+ospace.value = {}
+mt.__index = function (table, key)
+	print("=index>", table, key)
+	return ospace.value[key]
+end
+
+
+mt.__newindex = function(table, key, value)
+	print("=new_index>", table, key, value)
+	ospace.value[key] = value
+end
+
+
+ospace.a = "aaa"
+ospace:print()
+
+print(ospace.a)
+print(ospace[a])
+print(ospace["a"])
+ospace.value.log = ospace.print
+ospace:log()
+

@@ -1,0 +1,72 @@
+QUEUE = {}
+
+function QUEUE:New()
+	return { head = 0, tail = 0 }
+end
+
+function QUEUE:Enqueue(queue, value)
+	local tailPoint = queue.tail
+	queue[tailPoint] = value
+	queue.tail = tailPoint + 1
+end
+
+function QUEUE:Dequeue(queue)
+	if queue.head == queue.tail then
+		print("queue is empty")
+		return
+	end
+	
+	local headPoint = queue.head
+	local retValue = queue[headPoint]
+	queue[headPoint] = nil
+	queue.head = headPoint + 1
+	
+	return retValue
+end
+
+function QUEUE:Length(queue)
+	return queue.tail - queue.head
+end
+
+
+TABLE = {}
+function TABLE:Length(t)
+	local c = 0
+	for k, v in pairs(t) do
+		c = c + 1
+	end
+	
+	return c
+end
+
+--ContainsKey
+function TABLE:ContainsValue(t, v)
+
+	local result = false
+	for k, tv in pairs(t) do
+		if tv == v then 
+			return true
+		end
+	end
+	
+	return false
+end
+
+function TABLE:TryGetValue(t, key)
+	for k, tv in pairs(t) do
+		if k == key then 
+			return tv
+		end
+	end
+	
+	return nil
+end
+
+function TABLE:Remove(t, v)
+	for k, tv in pairs(t) do
+		if tv == v then 
+			table.remove(t, k)
+		end
+	end
+end
+

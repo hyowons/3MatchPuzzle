@@ -1,0 +1,572 @@
+require 'lua_util'
+
+--singleton
+GameManager = {}
+function GameManager:new(o)
+	o = o or {}
+	setmetatable(o, self)
+	self.__index = self
+		
+	return o
+end
+
+function GameManager:GetInstance()
+	if self.m_pGameMain == nil then
+		self.m_pGameMain = self:new()
+	end
+
+	return self.m_pGameMain
+end
+
+function GameManager:ReleaseInstance()
+	if self.m_pGameMain then
+		self.m_pGameMain = nil
+	end
+end
+------------------------------
+
+
+local eGamePhase =
+{
+	NONE = 0,
+	INITIAL_STAGE = 1,
+	UPDATE_BUBBLE = 2,
+	BUBBLE_BOMB = 3,
+	PLAYER_TURN = 4,
+	CLEAR = 5,
+}
+
+local eGameMode = 
+{
+	GAME = 0,
+	OPTION = 1,
+}
+
+local eMissAniPhase =
+{
+	None = 0,
+	Begin=  1,
+	Return = 2,
+}
+
+
+local eTileDir = 
+{
+    Top = 0,
+    RightTop = 1,
+    RightBottom = 2,
+    Bottom = 3,
+    LeftBottom = 4,
+    LeftTop = 5,
+}
+
+local TILEBG_PATH = "Prefabs/TileBG";
+local BUBBLE_PATH = "Prefabs/BubbleIcon";
+
+local _gamePhase = eGamePhase.NONE
+local _bubblelayerMask = 1 << CS.UnityEngine.LayerMask.NameToLayer("Bubble")
+local _missSwap = eMissAniPhase.None
+local _swapSourceBubble = nil
+local _swapTargetBubble = nil
+
+
+local _mode = eGameMode.OPTION
+
+local _liveBubbleList = {}
+local _uselessBubbles = QUEUE:New()
+
+local _tileList = {}	--리스트
+local _tileDic = {}		--dicationry
+
+local _uselessMapTile = QUEUE:New()
+
+
+--타일 크기
+local TILE_SIZE = 45
+
+----------
+
+local _startButton = StartButton:GetComponent(typeof(CS.UIButton))
+local _optionButton = OptionButton:GetComponent(typeof(CS.UIButton))
+local _optionManager = OptionManager:GetComponent(typeof(CS.OptionManager))
+local _root = UIRoot:GetComponent(typeof(CS.UIRoot))
+local _gameBoardTrans = GameBoard.transform
+local _bubblePanel = BubblePanel
+local _tileMapParent = MapTilePanel.transform
+
+local _bubbleRes = nil
+local _tileBGRes = nil
+
+
+local _pressedBubble = nil;
+
+
+
+function TileWidth()
+	return _optionManager.WidthSize
+end
+
+function TileHeight()
+	return _optionManager.HeightSize
+end
+
+function MatchBubbleCount()
+	return _optionManager.MatchBubbleCount
+end
+
+function BubbleTypeCount()
+	return _optionManager.BubbleCount
+end
+
+function start()
+	print("gamemain lua start")
+	_gamePhase = eGamePhase.None
+	
+	OnOptionOpen()
+	
+	--시작버튼
+	 _startButton.onClick:Add( CS.EventDelegate( function() OnStartGame() end ) ) 
+	 -- _startButton:OnClickAsObservable_button():SubScribe( function() OnStartGame() end) 
+	
+	--옵션버튼
+	_optionButton.onClick:Add( CS.EventDelegate( function() OnOptionOpen() end ) )
+	
+	_bubbleRes = CS.UnityEngine.Resources.Load(BUBBLE_PATH)
+	_tileBGRes = CS.UnityEngine.Resources.Load(TILEBG_PATH)
+	
+	
+end
+
+function InitScale()
+	local x = 0
+	local y = 0
+	
+	local widthSize = TileWidth() * TILE_SIZE
+	local heightSize = TileHeight() * TILE_SIZE
+	
+	local scaleW = (_root.manualWidth - 20) / widthSize
+	local scaleH = (_root.manualHeight - 300) / heightSize
+	
+	if scaleH > 1.5 and scaleW > 1.5 then
+		x = ((widthSize * 1.5) / 2.0)
+		y = ((heightSize * 1.5) / 2.0)
+		
+		_gameBoardTrans.localPosition = {x = -x, y = y, z = 0}	
+		_gameBoardTrans.localScale = {x = 1.5, y = 1.5, z = 1}
+		
+	else
+		local min = CS.UnityEngine.Mathf.Min(scaleW, scaleH)
+		_gameBoardTrans.localScale = {x = min, y = min, z = 1}
+		
+		if ( widthSize * min + 1) < (_root.manualWidth - 20) then
+			x = ((widthSize * min) / 2.0) + ((TILE_SIZE * min) / 2.0);
+		else
+			x = ((_root.manualWidth - 20) / 2.0)
+		end
+		
+		
+		if ( heightSize * min + 1) < (_root.manualHeight - 300) then
+			y = ((heightSize * min) / 2.0) + ((TILE_SIZE * min) / 2.0)
+		else
+			y = ((_root.manualHeight - 300) / 2.0)
+		end
+		
+		_gameBoardTrans.localPosition = {x = -x, y = y, z = 0}
+	end
+	
+	
+	
+end
+
+
+function OnStartGame()
+	
+	if _mode == eGameMode.OPTION then
+	
+		InitStage(TileWidth(), TileHeight())
+		MakeUselessBubbles()
+		InitScale()	
+	end
+	
+	_gamePhase = eGamePhase.INITIAL_STAGE
+	_missSwap = eMissAniPhase.None
+	_swapSourceBubble = nil
+	_swapTargetBubble = nil
+	
+	_optionManager.gameObject:SetActive(false)
+	_mode = eGameMode.GAME
+	
+end
+
+function OnOptionOpen()
+	_gameBoardTrans.localPosition = {x = 10000, y = 0, z = 0}
+	_optionManager.gameObject:SetActive(true)
+	_gamePhase = eGamePhase.NONE
+	_mode = eGameMode.OPTION;
+
+end
+
+function update()
+	
+	if _gamePhase == eGamePhase.INITIAL_STAGE then
+		MakeUselessBubbles()
+		_gamePhase = eGamePhase.UPDATE_BUBBLE
+	elseif _gamePhase == eGamePhase.UPDATE_BUBBLE then
+		if UpdateBubble() == true then
+			if _missSwap == eMissAniPhase.Begin then
+				BubbleSwap(_swapSourceBubble, _swapTargetBubble)
+				_missSwap = eMissAniPhase.Return
+				OnClickBubble(nil, false)
+				_swapSourceBubble = nil
+				_swapTargetBubble = nil
+				
+			elseif _missSwap == eMissAniPhase.Return then
+				_missSwap = eMissAniPhase.None;
+				_gamePhase = eGamePhase.PLAYER_TURN 
+			elseif _missSwap == eMissAniPhase.None	then
+				_gamePhase = eGamePhase.BUBBLE_BOMB
+			end
+		end
+	
+	elseif _gamePhase == eGamePhase.BUBBLE_BOMB then
+		if CalcBubbleBomb(true) == true then 
+			_gamePhase = eGamePhase.UPDATE_BUBBLE
+		else 
+			_gamePhase = eGamePhase.PLAYER_TURN
+		end
+		
+	elseif _gamePhase == eGamePhase.PLAYER_TURN then
+		CheckSwapBubble()
+	elseif _gamePhase == eGamePhase.CLEAR then
+	
+	end
+end
+
+function CalcBubbleBomb(clear)
+	
+	for key, tile in ipairs(_tileList) do
+		if tile.IsEmptyTile == false and tile.TargetBubble ~= nil then
+			tile.TargetBubble:CalcBubbleBomb()
+		end
+	end
+	
+	local bomb = false
+	
+	for key, tile in ipairs(_tileList) do
+		if tile.IsEmptyTile == false and tile.TargetBubble ~= nil then
+			if tile.TargetBubble.IsBomb == true then
+				if clear == true then
+					ChainBomb(tile.TargetBubble)
+				end
+				bomb = true
+			end
+		end
+	end
+	
+	for key, bubble in ipairs(_liveBubbleList) do
+		bubble:ClearBombInfo()
+		
+		if bomb == true then
+			bubble:FindNextTile()
+		end
+	end
+	
+	return bomb
+end
+
+function MakeUselessBubbles()
+	for key, bubble in ipairs(_liveBubbleList) do
+		bubble.transform.localPosition = { x = 10000, y = 0, z = 0}
+		QUEUE:Enqueue(_uselessBubbles, bubble)
+		bubble:ClearBubble()
+	end
+	
+	_liveBubbleList = {}
+	
+	local createitemCount = TileWidth() * TileHeight() - QUEUE:Length(_uselessBubbles)
+	
+	for i = 1, createitemCount do
+		bubbleObj = CS.UnityEngine.GameObject.Instantiate(_bubbleRes)
+		bubbleObj.transform.parent = _bubblePanel.transform
+		bubbleObj.transform.localScale = {x = 1, y = 1, z = 1}
+		bubbleObj.transform.localPosition = {x = 10000, y = 0, z = 0}
+		bubble = bubbleObj:GetComponent(typeof(CS.BubbleScript))
+		QUEUE:Enqueue(_uselessBubbles, bubble)
+		
+		bubble:Init()
+	end
+	
+end
+
+
+function InitStage(width, height)
+
+	for key, tile in ipairs(_tileList) do
+		QUEUE:Enqueue(_uselessMapTile, tile)
+		tile.gameObject.transform.localPosition = { x = 10000, y = 0, z = 0}	
+	end
+	
+	_tileList = {}
+	_tileDic = {}
+	
+	local rockTileCount = _optionManager.RockCount
+	local rockIDXSet = {}
+	
+	while rockTileCount > 0 do
+		local rockIDX = CS.UnityEngine.Random.Range(0, height * width)
+		if TABLE:ContainsValue(roucIDSet, rockIDX) == false then
+			table.Insert(rockIDXSet, rockIDX)
+			rockTileCount = rockTileCount - 1
+		end
+	end
+	
+	for h = 0, height - 1 do
+		for w = 0, width - 1 do
+		
+			local tile = nil
+
+			if QUEUE:Length(_uselessMapTile) == 0 then
+				tileBG = CS.UnityEngine.GameObject.Instantiate(_tileBGRes)
+				tileBG.transform.parent = _tileMapParent
+				tileBG.transform.localScale = {x = 1, y = 1, z = 1}
+				tile = tileBG:GetComponent(typeof(CS.MapTile))
+			else
+				tile = QUEUE:Dequeue(_uselessMapTile)
+			end
+			
+			local tilePosY = 0
+			if w % 2 == 0 then
+				tilePosY = h * TILE_SIZE 
+			else
+				tilePosY = h * TILE_SIZE + (TILE_SIZE / 2.0)
+			end
+			
+			tilePosY = tilePosY * -1
+			tile.gameObject.transform.localPosition = { x = w * TILE_SIZE + (TILE_SIZE / 2.0), y = tilePosY, z = 0}
+			
+			local idx = h * width + w
+			local rockTile = TABLE:ContainsValue(rockIDXSet, idx)
+			
+			tile:InitMapTile(idx, ((h == height - 1) and (w % 2 == 1)) or rockTile )
+			
+			tile.gameObject.name = tile.INDEX
+			table.insert(_tileDic, tile.INDEX + 1, tile)	--table key가 0이 될 수 없음
+			table.insert(_tileList, tile)
+		end
+	end
+	
+	rockIDXSet = nil
+	
+	for k, v in pairs(_tileDic) do
+		v:CalcNearbyTile()
+	end
+	
+end
+
+function GetTile(index)
+	local result = TABLE:TryGetValue(_tileDic, index + 1)
+	
+	if result ~= nil and result.IsEmptyTile == true then
+		return nil
+	end
+
+	return result
+end
+
+function UpdateBubble()
+	local updateComplete = true
+	
+	local tableLength = TABLE:Length(_tileList)
+	
+	if tableLength == 0 then
+		return
+	end
+	
+	local i = tableLength
+	while i > 0 do
+	
+		local tile = _tileList[i]
+		
+		if tile.IsEmptyTile == false then
+		
+			if tile.TargetBubble == nil then
+				if (i - 1)  < TileWidth() then
+					local bubble = nil
+					
+					if QUEUE:Length( _uselessBubbles) == 0 then
+						local bubbleObj = CS.UnityEngine.GameObject.Instantiate(_bubbleRes)
+						bubbleObj.transform.parent = _bubblePanel.transform
+						bubble.transform.localScale = {x = 1, y = 1, z = 1}
+						bubble = bubbleObj:GetComponent(typeof(CS.BubbleScript))
+						bubble:Init()
+					else
+						bubble = QUEUE:Dequeue(_uselessBubbles)
+						bubble.gameObject:SetActive(true)
+					end
+					
+					table.insert(_liveBubbleList, bubble)
+					
+					bubble.transform.localPosition = { x = TILE_SIZE * (i - 1) + (TILE_SIZE/2), y = TILE_SIZE - (((i-1) % 2) * (TILE_SIZE / 2)), z = 0}
+					
+					bubble.TargetMapTile = tile
+					tile.TargetBubble = bubble
+					bubble:GenerateBubble()	
+				end
+			
+				if (i - 1) < TileWidth() and tile.TargetBubble:UpdateBubble(CS.UnityEngine.Time.deltaTime) == true then
+					updateComplete = false
+				end
+				
+			else
+				if tile.TargetBubble:UpdateBubble(CS.UnityEngine.Time.deltaTime) == true then
+					updateComplete = false
+				end
+			end
+		end
+	
+		i = i - 1
+	end
+
+	
+	return updateComplete
+end
+
+function OnClickBubble(bubble, isPress)
+	if _gamePhase ~= eGamePhase.PLAYER_TURN and isPress == true then 
+		return 
+	end
+	
+	if isPress == false then
+		_pressedBubble = nil
+		return
+	end
+	
+	_pressedBubble = bubble
+end
+
+function CheckSwapBubble()
+	if _gamePhase ~= eGamePhase.PLAYER_TURN or _pressedBubble == nil then
+		return
+	end
+	
+	local ray = CS.UICamera.currentCamera:ScreenPointToRay( CS.UnityEngine.Input.mousePosition)
+	local flag, hit = CS.UTIL.RayFunction(ray, _bubblelayerMask)
+	
+	if flag == true then
+		bubble = hit.collider.gameObject:GetComponent(typeof(CS.BubbleScript))
+		if bubble == nil then
+			return
+		end
+		
+		if bubble.TargetMapTile:IsNearbyMapTile(_pressedBubble.TargetMapTile) == true then
+			if SwapBubble(_pressedBubble, bubble) == true then
+				BubbleSwap(_pressedBubble, bubble)
+				OnClickBubble(nil, false)
+			else
+				_missSwap = eMissAniPhase.Begin
+				BubbleSwap(_pressedBubble, bubble)
+				_swapTargetBubble = bubble
+				_swapSourceBubble = _pressedBubble
+			end
+			
+			_gamePhase = eGamePhase.UPDATE_BUBBLE
+		end
+		
+		
+	end
+
+end
+
+function SwapBubble(bubble1, bubble2)
+
+	-- local tempType = bubble1.BubbleType
+	-- bubble1.BubbleType = bubble2.BubbleType
+	-- bubble2.BubbleType = tempType
+	
+	bubble1.BubbleType, bubble2.BubbleType = bubble2.BubbleType, bubble1.BubbleType
+	
+	local isBomb = CalcBubbleBomb(false)
+	
+	bubble1.BubbleType, bubble2.BubbleType = bubble2.BubbleType, bubble1.BubbleType
+	
+	-- tempType = bubble1.BubbleType
+	-- bubble1.BubbleType = bubble2.BubbleType
+	-- bubble2.BubbleType = tempType
+
+	return isBomb
+end 
+
+function BubbleSwap(bubble1, bubble2)
+	local temp = bubble1.TargetMapTile
+	bubble1.TargetMapTile = bubble2.TargetMapTile
+	bubble1.TargetMapTile.TargetBubble = bubble1
+	bubble2.TargetMapTile = temp
+	bubble2.TargetMapTile.TargetBubble = bubble2
+end
+
+function ChainBomb(bubble)
+
+	local t = nil
+	local rt = nil
+	local rb = nil
+	local b = nil
+	local lb = nil
+	local lt = nil
+	
+	if bubble:GetChainBombCount(eTileDir.Top) >= MatchBubbleCount() then
+		t = bubble.TargetMapTile:GetNearbMapTile(eTileDir.Top)
+	end
+	
+	if bubble:GetChainBombCount(eTileDir.RightTop) >= MatchBubbleCount() then
+		rt = bubble.TargetMapTile:GetNearbMapTile(eTileDir.RightTop)
+	end
+	if bubble:GetChainBombCount(eTileDir.RightBottom) >= MatchBubbleCount() then
+		rb = bubble.TargetMapTile:GetNearbMapTile(eTileDir.RightBottom)
+	end
+	if bubble:GetChainBombCount(eTileDir.Bottom) >= MatchBubbleCount() then
+		b = bubble.TargetMapTile:GetNearbMapTile(eTileDir.Bottom)
+	end
+	if bubble:GetChainBombCount(eTileDir.LeftBottom) >= MatchBubbleCount() then
+		lb = bubble.TargetMapTile:GetNearbMapTile(eTileDir.LeftBottom)
+	end
+	if bubble:GetChainBombCount(eTileDir.LeftTop) >= MatchBubbleCount() then
+		lt = bubble.TargetMapTile:GetNearbMapTile(eTileDir.LeftTop)
+	end
+	
+	if t == nil and rt == nil and rb == nil and b == nil and lb == nil and lt == nil then 
+		return
+	end
+	
+	bubble:ClearBubble()
+	bubble.transform.localPosition = {x = 10000, y = 0, z = 0}
+	
+	TABLE:Remove(_liveBubbleList, bubble)
+	QUEUE:Enqueue(_uselessBubbles, bubble)
+	
+	if t ~= nil and t.TargetBubble ~= nil then 
+		ChainBomb(t.TargetBubble)
+	end
+	
+	if rt ~= nil and rt.TargetBubble ~= nil then 
+		ChainBomb(rt.TargetBubble)
+	end
+	
+	if rb ~= nil and rb.TargetBubble ~= nil then 
+		ChainBomb(rb.TargetBubble)
+	end
+	
+	if b ~= nil and b.TargetBubble ~= nil then 
+		ChainBomb(b.TargetBubble)
+	end
+	
+	if lb ~= nil and lb.TargetBubble ~= nil then 
+		ChainBomb(lb.TargetBubble)
+	end
+	
+	if lt ~= nil and lt.TargetBubble ~= nil then 
+		ChainBomb(lt.TargetBubble)
+	end
+
+end
+
+
