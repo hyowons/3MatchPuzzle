@@ -312,10 +312,12 @@ function InitStage(width, height)
 	local rockTileCount = _optionManager.RockCount
 	local rockIDXSet = {}
 	
+	--print("rockTileCount" .. rockTileCount)
+	
 	while rockTileCount > 0 do
-		local rockIDX = CS.UnityEngine.Random.Range(0, height * width)
-		if TABLE:ContainsValue(roucIDSet, rockIDX) == false then
-			table.Insert(rockIDXSet, rockIDX)
+		local rockIDX = math.floor(CS.UnityEngine.Random.Range(0, height * width))
+		if TABLE:ContainsValue(rockIDXSet, rockIDX) == false then
+			table.insert(rockIDXSet, rockIDX)
 			rockTileCount = rockTileCount - 1
 		end
 	end
